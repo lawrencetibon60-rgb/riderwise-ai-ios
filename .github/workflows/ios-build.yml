@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: xcode-27
 
     steps:
       - name: Checkout source
@@ -17,15 +17,14 @@ jobs:
       - name: Extract iOS project
         run: unzip -q RiderWiseAI_iOS_3.1.0_Complete.zip
 
+      - name: Verify Xcode and iOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
       - name: Run Swift tests
         working-directory: RiderWiseAI_iOS_3.1.0_Complete
         run: swift test
-
-      - name: Set supported iOS deployment target
-        working-directory: RiderWiseAI_iOS_3.1.0_Complete
-        run: |
-          sed -i '' 's/iOS: "27.0"/iOS: "18.5"/' project.yml
-          grep 'iOS:' project.yml
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -44,7 +43,6 @@ jobs:
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             ARCHS=arm64 \
-            EXCLUDED_ARCHS=x86_64 \
             CODE_SIGNING_ALLOWED=NO build
 
       - name: Build iOS Device
