@@ -1,0 +1,51 @@
+
+name: RiderWise iOS Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Extract iOS project
+        run: unzip -q RiderWiseAI_iOS_3.1.0_Complete.zip
+
+      - name: Run Swift tests
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodegen generate
+
+      - name: Build iOS Simulator
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: |
+          xcodebuild \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Build iOS Device
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: |
+          xcodebuild \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -sdk iphoneos \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO build
