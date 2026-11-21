@@ -21,6 +21,12 @@ jobs:
         working-directory: RiderWiseAI_iOS_3.1.0_Complete
         run: swift test
 
+      - name: Set supported iOS deployment target
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: |
+          sed -i '' 's/iOS: "27.0"/iOS: "18.5"/' project.yml
+          grep 'iOS:' project.yml
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -37,6 +43,8 @@ jobs:
             -sdk iphonesimulator \
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
+            ARCHS=arm64 \
+            EXCLUDED_ARCHS=x86_64 \
             CODE_SIGNING_ALLOWED=NO build
 
       - name: Build iOS Device
@@ -48,4 +56,5 @@ jobs:
             -sdk iphoneos \
             -configuration Debug \
             -destination 'generic/platform=iOS' \
+            ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO build
