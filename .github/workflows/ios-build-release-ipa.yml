@@ -1,0 +1,102 @@
+name: RiderWise iOS Build and IPA Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: xcode-27
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Extract repaired iOS project
+        run: unzip -q RiderWiseAI_iOS_3.1.3_BundleMetadata_Repair.zip
+
+      - name: Verify Xcode and iOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Run Swift tests
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodegen generate
+
+      - name: Build iOS Simulator
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: |
+          xcodebuild \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Archive iOS Device (unsigned Release)
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: |
+          xcodebuild \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/RiderWiseAI.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      - name: Validate app and extension bundle metadata
+        run: |
+          APP="$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP"
+          python3 - "$APP" <<'PY'
+          import pathlib, plistlib, sys
+          root = pathlib.Path(sys.argv[1])
+          bundles = [root] + sorted(root.rglob("*.appex"))
+          required = ("CFBundleIdentifier", "CFBundleExecutable", "CFBundleName",
+                      "CFBundleVersion", "CFBundlePackageType")
+          failed = False
+          for bundle in bundles:
+              info = bundle / "Info.plist"
+              if not info.is_file():
+                  print(f"FAIL: missing Info.plist: {bundle}")
+                  failed = True
+                  continue
+              data = plistlib.loads(info.read_bytes())
+              missing = [key for key in required if not data.get(key)]
+              executable = data.get("CFBundleExecutable")
+              if executable and not (bundle / executable).exists():
+                  missing.append("executable file missing: " + executable)
+              print(f"{bundle.name}: id={data.get('CFBundleIdentifier')} "
+                    f"type={data.get('CFBundlePackageType')} missing={missing}")
+              if missing:
+                  failed = True
+          if failed:
+              raise SystemExit("Bundle metadata validation failed")
+          PY
+
+      - name: Package unsigned Release IPA
+        run: |
+          APP="$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/RiderWiseAI.app"
+          cd "$RUNNER_TEMP/ipa"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/RiderWiseAI-3.1.3-unsigned-Release.ipa" Payload
+
+      - name: Upload unsigned Release IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RiderWiseAI-3.1.3-unsigned-Release-IPA
+          path: RiderWiseAI-3.1.3-unsigned-Release.ipa
+          if-no-files-found: error
+          retention-days: 7
