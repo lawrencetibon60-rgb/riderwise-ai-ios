@@ -1,0 +1,54 @@
+name: RiderWise AI 3.3.0 Verification First
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract project
+        run: |
+          unzip -q RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence.zip
+          test -d RiderWiseAI_iOS_3.1.0_Complete
+      - name: Verify geographic data
+        run: |
+          python3 - <<'PY'
+          import json
+          p='RiderWiseAI_iOS_3.1.0_Complete/Sources/RiderWiseCore/luzon_psgc_3q_2026.json'
+          d=json.load(open(p))
+          assert len(d['records']) == d['recordCount']
+          print('PSGC records:', len(d['records']))
+          PY
+      - name: Run core tests
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: swift test
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodegen generate
+      - name: Build Simulator
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodebuild -project RiderWiseAI.xcodeproj -scheme RiderWiseAI -sdk iphonesimulator -configuration Release CODE_SIGNING_ALLOWED=NO build
+      - name: Archive unsigned iOS app
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodebuild -project RiderWiseAI.xcodeproj -scheme RiderWiseAI -destination 'generic/platform=iOS' -configuration Release -archivePath "$RUNNER_TEMP/RiderWiseAI.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+      - name: Verify IPA contents and PiP-only scope
+        run: |
+          APP="$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP"
+          find "$APP" -name 'luzon_psgc_3q_2026.json' -print -quit | grep .
+          if find "$APP/PlugIns" -maxdepth 1 -iname '*LiveActivity*' 2>/dev/null | grep -q .; then exit 1; fi
+      - name: Package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/RiderWiseAI-3.3.0-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiderWiseAI-3.3.0-unsigned-IPA
+          path: RiderWiseAI-3.3.0-unsigned.ipa
+          retention-days: 7
