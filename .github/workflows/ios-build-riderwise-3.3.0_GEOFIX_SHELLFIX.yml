@@ -1,0 +1,119 @@
+name: RiderWise AI 3.3.0 Verification First
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate and extract project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=""
+          for candidate in \
+            "RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence.zip" \
+            "RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence_FIXED.zip" \
+            "RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence_ARCHFIX.zip" \
+            "RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence_VERIFYFIX.zip" \
+            "RiderWiseAI_iOS_3.3.0_VerificationFirst_Intelligence_GEOFIX.zip"; do
+            if [ -f "$candidate" ]; then
+              ZIP_FILE="$candidate"
+              break
+            fi
+          done
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::Project ZIP not found in repository root. Upload the standard, _FIXED, _ARCHFIX, _VERIFYFIX, or _GEOFIX 3.3.0 ZIP."
+            echo "Root files:"
+            ls -la
+            exit 1
+          fi
+          echo "Extracting: $ZIP_FILE"
+          unzip -q "$ZIP_FILE"
+          test -d RiderWiseAI_iOS_3.1.0_Complete
+
+      - name: Verify geographic data
+        run: |
+          python3 - <<'PY'
+          import json
+          p='RiderWiseAI_iOS_3.1.0_Complete/Sources/RiderWiseCore/luzon_psgc_3q_2026.json'
+          with open(p, encoding='utf-8') as f:
+              d=json.load(f)
+          assert len(d['records']) == d['recordCount']
+          print('PSGC records:', len(d['records']))
+          PY
+
+      - name: Run core tests
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodegen generate
+
+      - name: Build Simulator
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodebuild -project RiderWiseAI.xcodeproj -scheme RiderWiseAI -sdk iphonesimulator -configuration Release ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build
+
+      - name: Archive unsigned iOS app
+        working-directory: RiderWiseAI_iOS_3.1.0_Complete
+        run: xcodebuild -project RiderWiseAI.xcodeproj -scheme RiderWiseAI -destination 'generic/platform=iOS' -configuration Release -archivePath "$RUNNER_TEMP/RiderWiseAI.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+
+      - name: Verify geographic resources and PiP-only app
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP" || { echo "::error::Archived RiderWiseAI.app is missing"; exit 1; }
+
+          echo "=== Geographic assets in app/framework bundles ==="
+          find "$APP" -type f -name 'luzon_psgc_3q_2026.json' -print
+          find "$APP" -type f -name 'luzon_psgc_3q_2026.json.gz' -print
+          find "$APP" -type f -name 'geographic_centroids_legacy.json' -print
+
+          PSGC_FILE="$(find "$APP" -type f -name 'luzon_psgc_3q_2026.json' -print -quit || true)"
+          if [ -z "$PSGC_FILE" ]; then
+            PSGC_FILE="$(find "$APP" -type f -name 'luzon_psgc_3q_2026.json.gz' -print -quit || true)"
+          fi
+          if [ -z "$PSGC_FILE" ]; then
+            echo "::error::Luzon PSGC JSON is still missing from the app archive."
+            find "$APP" -maxdepth 7 -type f | sort | head -300
+            exit 1
+          fi
+          echo "Found geographic index: $PSGC_FILE"
+
+          echo "=== Embedded app extensions ==="
+          if [ -d "$APP/PlugIns" ]; then
+            find "$APP/PlugIns" -maxdepth 2 -print
+          else
+            echo "No PlugIns directory."
+          fi
+
+          LIVE_ACTIVITY=""
+          if [ -d "$APP/PlugIns" ]; then
+            LIVE_ACTIVITY="$(find "$APP/PlugIns" -maxdepth 1 -type d -iname '*LiveActivity*.appex' -print -quit || true)"
+          fi
+          if [ -n "$LIVE_ACTIVITY" ]; then
+            echo "::error::Unexpected Live Activity extension found: $LIVE_ACTIVITY"
+            exit 1
+          fi
+          echo "Geographic asset and PiP-only naming checks passed."
+
+      - name: Package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/RiderWiseAI.xcarchive/Products/Applications/RiderWiseAI.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/RiderWiseAI-3.3.0-unsigned.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiderWiseAI-3.3.0-unsigned-IPA
+          path: RiderWiseAI-3.3.0-unsigned.ipa
+          retention-days: 7
