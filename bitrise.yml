@@ -1,0 +1,108 @@
+format_version: '13'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+
+meta:
+  bitrise.io:
+    stack: osx-xcode-latest-stable
+
+workflows:
+  primary:
+    title: RiderWise AI 3.3.7 - Unsigned iOS IPA
+    description: >-
+      Extracts the committed RiderWise source ZIP, generates the Xcode project
+      with XcodeGen, archives the iOS device app without code signing, packages
+      an unsigned IPA, and uploads the IPA and build logs as Bitrise artifacts.
+    steps:
+      - git-clone@8: {}
+      - script@1:
+          title: Extract source and generate Xcode project
+          inputs:
+            - content: |-
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                ZIP_PATH="$BITRISE_SOURCE_DIR/RiderWiseAI_iOS_3.3.7_ApplePicker_Fix_GitHub.zip"
+                if [ ! -f "$ZIP_PATH" ]; then
+                  echo "ERROR: Expected source ZIP was not found: $ZIP_PATH"
+                  echo "Repository root contents:"
+                  ls -la "$BITRISE_SOURCE_DIR"
+                  exit 1
+                fi
+
+                unzip -tq "$ZIP_PATH"
+                SOURCE_ROOT="$BITRISE_SOURCE_DIR/.bitrise-riderwise-source"
+                rm -rf "$SOURCE_ROOT"
+                mkdir -p "$SOURCE_ROOT"
+                unzip -q "$ZIP_PATH" -d "$SOURCE_ROOT"
+
+                PROJECT_SPEC="$(find "$SOURCE_ROOT" -type f -name project.yml -print -quit)"
+                if [ -z "$PROJECT_SPEC" ]; then
+                  echo "ERROR: project.yml was not found inside the source ZIP."
+                  exit 1
+                fi
+                PROJECT_DIR="$(dirname "$PROJECT_SPEC")"
+                echo "Using source directory: $PROJECT_DIR"
+
+                if ! command -v xcodegen >/dev/null 2>&1; then
+                  brew install xcodegen
+                fi
+
+                cd "$PROJECT_DIR"
+                xcodegen generate --spec project.yml
+                test -d RiderWiseAI.xcodeproj
+
+                envman add --key RIDERWISE_PROJECT_DIR --value "$PROJECT_DIR"
+                envman add --key RIDERWISE_BUILD_DIR --value "$BITRISE_DEPLOY_DIR"
+                xcodebuild -version
+                xcodebuild -resolvePackageDependencies \
+                  -project RiderWiseAI.xcodeproj \
+                  -scheme RiderWiseAI
+      - script@1:
+          title: Archive unsigned iOS device app and package IPA
+          inputs:
+            - content: |-
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                cd "$RIDERWISE_PROJECT_DIR"
+                ARCHIVE_PATH="$RIDERWISE_BUILD_DIR/RiderWiseAI-3.3.7.xcarchive"
+                LOG_PATH="$RIDERWISE_BUILD_DIR/RiderWiseAI-3.3.7-device-archive.log"
+                IPA_PATH="$RIDERWISE_BUILD_DIR/RiderWiseAI-3.3.7-unsigned.ipa"
+
+                set -o pipefail
+                xcodebuild \
+                  -project RiderWiseAI.xcodeproj \
+                  -scheme RiderWiseAI \
+                  -sdk iphoneos \
+                  -configuration Release \
+                  -destination 'generic/platform=iOS' \
+                  -archivePath "$ARCHIVE_PATH" \
+                  CODE_SIGNING_ALLOWED=NO \
+                  archive 2>&1 | tee "$LOG_PATH"
+
+                APP_PATH="$ARCHIVE_PATH/Products/Applications/RiderWiseAI.app"
+                if [ ! -d "$APP_PATH" ]; then
+                  echo "ERROR: Expected archived app not found: $APP_PATH"
+                  exit 1
+                fi
+
+                /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist" | grep -qx 'ph.riderwise.ai'
+                /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist" | grep -qx '3.3.7'
+                /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist" | grep -qx '337'
+
+                RESOURCE_FOUND="$(find "$APP_PATH" -type f \( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \) -print -quit)"
+                if [ -z "$RESOURCE_FOUND" ]; then
+                  echo "ERROR: Luzon geographic resource was not found in the archived app."
+                  exit 1
+                fi
+
+                PACKAGE_DIR="$BITRISE_BUILD_DIR/ipa-package"
+                rm -rf "$PACKAGE_DIR"
+                mkdir -p "$PACKAGE_DIR/Payload"
+                cp -R "$APP_PATH" "$PACKAGE_DIR/Payload/"
+                (cd "$PACKAGE_DIR" && /usr/bin/zip -qry "$IPA_PATH" Payload)
+                unzip -tq "$IPA_PATH"
+                echo "Unsigned IPA created: $IPA_PATH"
+                echo "NOTE: This unsigned IPA is a build artifact only; it cannot be installed on a physical iPhone until properly signed and provisioned."
+      - deploy-to-bitrise-io@2: {}
