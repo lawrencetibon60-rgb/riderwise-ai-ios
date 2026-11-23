@@ -1,0 +1,119 @@
+workflows:
+  ios-unsigned-ipa:
+    name: RiderWise AI 3.3.4 - Downloadable IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: "27.1"
+
+    scripts:
+      - name: Extract source ZIP
+        script: |
+          set -euo pipefail
+          mkdir -p "$CM_BUILD_DIR/source"
+
+          SOURCE_ZIP=$(find "$CM_BUILD_DIR" -maxdepth 3 \
+            -name '*DEVICEFIX*.zip' -print -quit)
+
+          if [ -z "$SOURCE_ZIP" ]; then
+            echo "ERROR: Source ZIP not found"
+            exit 1
+          fi
+
+          echo "Using source archive: $SOURCE_ZIP"
+          unzip -oq "$SOURCE_ZIP" -d "$CM_BUILD_DIR/source"
+
+          PROJECT_YML=$(find "$CM_BUILD_DIR/source" \
+            -name project.yml -print -quit)
+
+          if [ -z "$PROJECT_YML" ]; then
+            echo "ERROR: project.yml not found in source archive"
+            exit 1
+          fi
+
+          dirname "$PROJECT_YML" > "$CM_BUILD_DIR/project_path.txt"
+          echo "Project directory: $(cat "$CM_BUILD_DIR/project_path.txt")"
+
+      - name: Install XcodeGen
+        script: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        script: |
+          set -euo pipefail
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_path.txt")
+          cd "$PROJECT_DIR"
+
+          xcodegen generate --spec project.yml
+
+          if [ ! -d RiderWiseAI.xcodeproj ]; then
+            echo "ERROR: RiderWiseAI.xcodeproj was not generated"
+            exit 1
+          fi
+
+          xcodebuild -list -project RiderWiseAI.xcodeproj
+
+      - name: Resolve dependencies
+        script: |
+          set -euo pipefail
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_path.txt")
+          cd "$PROJECT_DIR"
+
+          xcodebuild -resolvePackageDependencies \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI
+
+      - name: Build physical iPhone app
+        script: |
+          set -euo pipefail
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_path.txt")
+          cd "$PROJECT_DIR"
+
+          xcodebuild \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/build/derived" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Create downloadable unsigned IPA
+        script: |
+          set -euo pipefail
+
+          APP_PATH="$CM_BUILD_DIR/build/derived/Build/Products/Release-iphoneos/RiderWiseAI.app"
+          IPA_PATH="$CM_BUILD_DIR/RiderWiseAI-3.3.4-unsigned.ipa"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: Built RiderWiseAI.app not found"
+            exit 1
+          fi
+
+          rm -rf "$CM_BUILD_DIR/package"
+          mkdir -p "$CM_BUILD_DIR/package/Payload"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/package/Payload/"
+
+          cd "$CM_BUILD_DIR/package"
+          /usr/bin/zip -qry "$IPA_PATH" Payload
+
+          if [ ! -s "$IPA_PATH" ]; then
+            echo "ERROR: IPA archive was not created"
+            exit 1
+          fi
+
+          echo "SUCCESS: IPA created"
+          ls -lh "$IPA_PATH"
+
+    artifacts:
+      - RiderWiseAI-3.3.4-unsigned.ipa
+      - build/derived/Logs/**/*.xcresult
+      - build/derived/Build/Products/Release-iphoneos/*.app
