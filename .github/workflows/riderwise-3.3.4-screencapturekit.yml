@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "RiderWiseAI_iOS_3.3.4_ScreenCaptureKit.zip"
+      - ".github/workflows/riderwise-3.3.4-screencapturekit.yml"
 
 permissions:
   contents: read
@@ -14,16 +15,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install Swift
-        uses: swift-actions/setup-swift@v2
+      - uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.2"
-      - name: Extract and validate source archive
+      - name: Extract source archive
         shell: bash
         run: |
           set -euo pipefail
           ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.3.4_ScreenCaptureKit.zip"
-          test -f "$ZIP" || { echo "::error::Source archive is missing."; exit 1; }
+          test -f "$ZIP"
           unzip -tq "$ZIP"
           mkdir -p "$RUNNER_TEMP/riderwise-source"
           unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
@@ -42,9 +42,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.3.4_ScreenCaptureKit.zip"
           mkdir -p "$RUNNER_TEMP/riderwise-source"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          unzip -q "$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.3.4_ScreenCaptureKit.zip" -d "$RUNNER_TEMP/riderwise-source"
           PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
           test -n "$PROJECT_FILE"
           echo "PROJECT_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
@@ -76,7 +75,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/RiderWiseAI.xcarchive" \
             CODE_SIGNING_ALLOWED=NO archive 2>&1 | tee "$RUNNER_TEMP/device-archive.log"
-      - name: Verify archive metadata, capture architecture and resources
+      - name: Verify archive metadata and ScreenCaptureKit architecture
         shell: bash
         run: |
           set -euo pipefail
@@ -88,7 +87,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -qx '334'
           /usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$APP/Info.plist" | grep -q 'approved'
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$APP/Info.plist" | grep -qx 'screen-capture'
-          find "$APP" -type f \( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \) -print -quit | grep -q .
+          find "$APP" -type f \\( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \\) -print -quit | grep -q .
       - name: Package unsigned IPA
         shell: bash
         run: |
