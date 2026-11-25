@@ -1,0 +1,57 @@
+name: Portable tests and source audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+      - ".github/workflows/portable-tests-and-source-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  portable-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+
+      - name: Verify and extract source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: Expected source ZIP not found: $(basename "$ZIP")"
+            echo "Repository root contents:"
+            ls -lah "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          mkdir -p "$RUNNER_TEMP/riderwise-source"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          if [[ -z "$PROJECT_FILE" ]]; then
+            echo "ERROR: project.yml not found inside source ZIP. Extracted files:"
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            exit 1
+          fi
+          SOURCE_DIR="$(dirname "$PROJECT_FILE")"
+          VERIFY_SCRIPT="$SOURCE_DIR/scripts/verify-portable.sh"
+          if [[ ! -f "$VERIFY_SCRIPT" ]]; then
+            echo "ERROR: scripts/verify-portable.sh not found at $VERIFY_SCRIPT"
+            find "$SOURCE_DIR" -maxdepth 4 -print | head -300
+            exit 1
+          fi
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+          echo "Verified source project: $SOURCE_DIR"
+
+      - name: Run Swift tests and source checks
+        shell: bash
+        run: bash "$SOURCE_DIR/scripts/verify-portable.sh"
