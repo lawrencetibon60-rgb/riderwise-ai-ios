@@ -1,21 +1,31 @@
-name: RiderWise AI 3.4.9 - Full Audit, iOS Archive and IPA Artifact
+name: RiderWise AI 3.5.0 - Combined Audit, Device Archive and IPA
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
-      - "RiderWiseAI_iOS_3.4.9_OCR_Reference_Repair_Combined_Workflow.zip"
+      - ".github/workflows/**"
+      - "RiderWiseAI_iOS_3.4.9*.zip"
+      - "RiderWiseAI_iOS_3.5.0*.zip"
+      - "Sources/**"
+      - "iOSApp/**"
+      - "Tests/**"
+      - "project.yml"
+      - "Package.swift"
+      - "scripts/**"
 
 permissions:
   contents: read
 
 concurrency:
-  group: riderwise-ios-full-build-${{ github.ref }}
+  group: riderwise-ios-combined-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  full-build:
-    name: Portable tests + Xcode 27 device archive + IPA
+  build-and-package:
+    name: Tests + Xcode 27 device archive + IPA artifact
     runs-on: xcode-27
     timeout-minutes: 120
 
@@ -37,32 +47,32 @@ jobs:
           set -euo pipefail
           xcode-select -p
           XCODE_VERSION="$(xcodebuild -version)"
-          printf '%s\\n' "$XCODE_VERSION" | tee "$RUNNER_TEMP/riderwise-logs/xcode-version.log"
+          printf '%s\n' "$XCODE_VERSION" | tee "$RUNNER_TEMP/riderwise-logs/xcode-version.log"
           if ! grep -Eq '^Xcode 27([.]|$)' <<< "$XCODE_VERSION"; then
-            echo "ERROR: This source uses ScreenCaptureKit for iOS 27. Xcode 27 or newer in the 27.x series is required."
+            echo "ERROR: RiderWise 3.5.0 uses iOS 27 ScreenCaptureKit APIs. Select an Xcode 27.x runner."
             exit 1
           fi
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk iphonesimulator --show-sdk-version
 
-      - name: Extract and verify source ZIP
+      - name: Locate and extract source ZIP or use checked-in source
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_OCR_Reference_Repair_Combined_Workflow.zip"
-          if [[ ! -f "$ZIP" ]]; then
-            echo "ERROR: Source ZIP is missing from the repository root:"
-            echo "  $(basename "$ZIP")"
-            echo "Upload the complete ZIP to the repository root using that exact filename."
-            ls -lah "$GITHUB_WORKSPACE"
-            exit 1
+          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \( -iname 'RiderWiseAI_iOS_3.4.9*.zip' -o -iname 'RiderWiseAI_iOS_3.5.0*.zip' \) -print | head -n 1)"
+          if [[ -n "$ZIP" ]]; then
+            echo "Using source archive: $(basename "$ZIP")"
+            unzip -tq "$ZIP"
+            unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+            SOURCE_ROOT="$RUNNER_TEMP/riderwise-source"
+          else
+            echo "No source ZIP at repository root; checking out the committed project files."
+            SOURCE_ROOT="$GITHUB_WORKSPACE"
           fi
-          unzip -tq "$ZIP"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
-          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          PROJECT_FILE="$(find "$SOURCE_ROOT" -type f -name project.yml -print -quit)"
           test -n "$PROJECT_FILE" || {
-            echo "ERROR: project.yml not found inside source ZIP."
-            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            echo "ERROR: project.yml was not found in the uploaded ZIP or repository."
+            find "$SOURCE_ROOT" -maxdepth 5 -print | head -300
             exit 1
           }
           PROJECT_DIR="$(dirname "$PROJECT_FILE")"
@@ -81,9 +91,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
-          fi
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
           xcodegen --version
 
       - name: Generate Xcode project and resolve packages
@@ -122,7 +130,7 @@ jobs:
             -sdk iphoneos \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
+            -archivePath "$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -132,48 +140,48 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive/Products/Applications/RiderWiseAI.app"
           test -d "$APP"
           test -s "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx 'ph.riderwise.ai'
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -qx '3.4.9'
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -qx '349'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -qx '3.5.0'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -qx '350'
           /usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$APP/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" | grep -q 'screen-capture'
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.screen-recording' "$PROJECT_DIR/iOSApp/RiderWiseAI.entitlements" | grep -qx 'true'
           find "$APP" -type f \( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \) -print -quit | grep -q .
-          echo "Archive metadata, screen-capture declarations and geography resources verified."
+          echo "3.5.0 archive metadata, ScreenCaptureKit declarations and Luzon resources verified."
 
-      - name: Package unsigned IPA and archive ZIP
+      - name: Package and enforce IPA size limit
         shell: bash
         run: |
           set -euo pipefail
-          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive/Products/Applications/RiderWiseAI.app"
           mkdir -p "$RUNNER_TEMP/riderwise-ipa/Payload"
           ditto "$APP" "$RUNNER_TEMP/riderwise-ipa/Payload/RiderWiseAI.app"
-          (cd "$RUNNER_TEMP/riderwise-ipa" && /usr/bin/zip -qry -9 "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa" Payload)
-          unzip -tq "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa"
-          IPA_BYTES="$(stat -f%z "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa")"
+          (cd "$RUNNER_TEMP/riderwise-ipa" && /usr/bin/zip -qry -9 "$ARTIFACT_DIR/RiderWiseAI-3.5.0-unsigned.ipa" Payload)
+          unzip -tq "$ARTIFACT_DIR/RiderWiseAI-3.5.0-unsigned.ipa"
+          IPA_BYTES="$(stat -f%z "$ARTIFACT_DIR/RiderWiseAI-3.5.0-unsigned.ipa")"
           IPA_LIMIT_BYTES=25000000
           echo "Unsigned IPA size: ${IPA_BYTES} bytes (limit: ${IPA_LIMIT_BYTES} bytes)"
           if (( IPA_BYTES > IPA_LIMIT_BYTES )); then
-            echo "ERROR: IPA exceeds the requested 25 MB limit. Review app resources and binary size before release."
+            echo "ERROR: IPA is larger than 25,000,000 bytes. Build artifact is not being reported as release-ready."
             exit 1
           fi
           ditto -c -k --sequesterRsrc --keepParent \
-            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
-            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive.zip"
+            "$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive" \
+            "$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive.zip"
           ls -lh "$ARTIFACT_DIR"
 
-      - name: Upload IPA, Xcode archive, and all build logs
+      - name: Upload IPA, Xcode archive and build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RiderWiseAI-3.4.9-FullBuild-IPA-${{ github.run_number }}
+          name: RiderWiseAI-3.5.0-FullBuild-IPA-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9-unsigned.ipa
-            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9.xcarchive.zip
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.5.0-unsigned.ipa
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.5.0.xcarchive.zip
             ${{ runner.temp }}/riderwise-logs/**
-          if-no-files-found: error
+          if-no-files-found: warn
           compression-level: 0
           retention-days: 14
