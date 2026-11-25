@@ -1,0 +1,171 @@
+name: RiderWise AI 3.4.9 - Full Audit, iOS Archive and IPA Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riderwise-ios-full-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-build:
+    name: Portable tests + Xcode 27 device archive + IPA
+    runs-on: xcode-27
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare output folders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/riderwise-artifacts" "$RUNNER_TEMP/riderwise-logs" "$RUNNER_TEMP/riderwise-source"
+          echo "ARTIFACT_DIR=$RUNNER_TEMP/riderwise-artifacts" >> "$GITHUB_ENV"
+          echo "LOG_DIR=$RUNNER_TEMP/riderwise-logs" >> "$GITHUB_ENV"
+
+      - name: Verify Xcode 27 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode-select -p
+          xcodebuild -version | tee "$RUNNER_TEMP/riderwise-logs/xcode-version.log"
+          xcodebuild -version | grep -Eq '^Xcode 27([.]|$)' || {
+            echo "ERROR: This source uses ScreenCaptureKit for iOS 27. The Xcode 27 runner is required."
+            exit 1
+          }
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+
+      - name: Extract and verify source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: Source ZIP is missing from the repository root:"
+            echo "  $(basename "$ZIP")"
+            echo "Upload the complete ZIP to the repository root using that exact filename."
+            ls -lah "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          test -n "$PROJECT_FILE" || {
+            echo "ERROR: project.yml not found inside source ZIP."
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            exit 1
+          }
+          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+          test -f "$PROJECT_DIR/scripts/verify-portable.sh"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Source project: $PROJECT_DIR"
+
+      - name: Run portable Swift tests and source audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          bash scripts/verify-portable.sh 2>&1 | tee "$LOG_DIR/portable-audit.log"
+
+      - name: Install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project and resolve packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          xcodegen generate 2>&1 | tee "$LOG_DIR/xcodegen.log"
+          xcodebuild -resolvePackageDependencies \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI 2>&1 | tee "$LOG_DIR/package-resolution.log"
+
+      - name: Build iOS Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          xcodebuild -jobs 2 \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/riderwise-simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$LOG_DIR/simulator-build.log"
+
+      - name: Archive for physical iOS devices (unsigned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          xcodebuild -jobs 2 \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive 2>&1 | tee "$LOG_DIR/device-archive.log"
+
+      - name: Verify archived app and capture configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP"
+          test -s "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx 'ph.riderwise.ai'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -qx '3.4.9'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -qx '349'
+          /usr/libexec/PlistBuddy -c 'Print :NSScreenCaptureUsageDescription' "$APP/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" | grep -q 'screen-capture'
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.screen-recording' "$PROJECT_DIR/iOSApp/RiderWiseAI.entitlements" | grep -qx 'true'
+          find "$APP" -type f \( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \) -print -quit | grep -q .
+          echo "Archive metadata, screen-capture declarations and geography resources verified."
+
+      - name: Package unsigned IPA and archive ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          mkdir -p "$RUNNER_TEMP/riderwise-ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/riderwise-ipa/Payload/RiderWiseAI.app"
+          (cd "$RUNNER_TEMP/riderwise-ipa" && /usr/bin/zip -qry "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa" Payload)
+          unzip -tq "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
+            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive.zip"
+          ls -lh "$ARTIFACT_DIR"
+
+      - name: Upload IPA, Xcode archive, and all build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RiderWiseAI-3.4.9-FullBuild-IPA-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9-unsigned.ipa
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9.xcarchive.zip
+            ${{ runner.temp }}/riderwise-logs/**
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
