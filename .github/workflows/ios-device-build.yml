@@ -1,0 +1,145 @@
+name: RiderWise AI 3.4.9 - iOS Device Build & IPA Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+      - ".github/workflows/ios-device-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: riderwise-ios-device-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios-device-build:
+    name: Archive iOS app and upload artifacts
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare artifact and log folders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/riderwise-artifacts" "$RUNNER_TEMP/riderwise-logs"
+          echo "ARTIFACT_DIR=$RUNNER_TEMP/riderwise-artifacts" >> "$GITHUB_ENV"
+          echo "LOG_DIR=$RUNNER_TEMP/riderwise-logs" >> "$GITHUB_ENV"
+
+      - name: Find and extract RiderWise source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: Expected source ZIP is missing from the repository root: $(basename "$ZIP")"
+            echo "Upload the RiderWise source ZIP to the repository root with that exact filename."
+            echo "Repository root contents:"
+            ls -la "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          mkdir -p "$RUNNER_TEMP/riderwise-source"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          if [[ -z "$PROJECT_FILE" ]]; then
+            echo "ERROR: project.yml was not found inside the source ZIP."
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 4 -print | head -300
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Source project: $PROJECT_DIR"
+
+      - name: Select and report Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode-select -p
+          xcodebuild -version | tee "$LOG_DIR/xcode-version.log"
+          xcodegen --version 2>/dev/null || true
+
+      - name: Install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project and resolve Swift packages
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          xcodegen generate 2>&1 | tee "$LOG_DIR/xcodegen.log"
+          xcodebuild -resolvePackageDependencies \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI 2>&1 | tee "$LOG_DIR/package-resolution.log"
+
+      - name: Archive for physical iOS devices (unsigned)
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -jobs 2 \
+            -project RiderWiseAI.xcodeproj \
+            -scheme RiderWiseAI \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive 2>&1 | tee "$LOG_DIR/device-archive.log"
+
+      - name: Verify archived app and required resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx 'ph.riderwise.ai'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -qx '3.4.9'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -qx '349'
+          if ! find "$APP" -type f \( -name 'luzon_psgc_3q_2026.json' -o -name 'luzon_psgc_3q_2026.json.gz' \) -print -quit | grep -q .; then
+            echo "ERROR: Luzon geography resource was not found in the archived app."
+            exit 1
+          fi
+          echo "Verified app bundle, version, build number, and geography resource."
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive/Products/Applications/RiderWiseAI.app"
+          mkdir -p "$RUNNER_TEMP/riderwise-ipa/Payload"
+          ditto "$APP" "$RUNNER_TEMP/riderwise-ipa/Payload/RiderWiseAI.app"
+          (cd "$RUNNER_TEMP/riderwise-ipa" && /usr/bin/zip -qry "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa" Payload)
+          unzip -tq "$ARTIFACT_DIR/RiderWiseAI-3.4.9-unsigned.ipa"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive" \
+            "$ARTIFACT_DIR/RiderWiseAI-3.4.9.xcarchive.zip"
+          ls -lh "$ARTIFACT_DIR"
+
+      - name: Upload IPA, Xcode archive, and build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RiderWiseAI-3.4.9-iOS-Device-Build-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9-unsigned.ipa
+            ${{ runner.temp }}/riderwise-artifacts/RiderWiseAI-3.4.9.xcarchive.zip
+            ${{ runner.temp }}/riderwise-logs/**
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
