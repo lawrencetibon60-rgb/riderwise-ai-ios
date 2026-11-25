@@ -7,7 +7,6 @@ on:
       - main
     paths:
       - ".github/workflows/**"
-      - "RiderWiseAI_iOS_3.4.9*.zip"
       - "RiderWiseAI_iOS_3.5.0*.zip"
       - "Sources/**"
       - "iOSApp/**"
@@ -59,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \( -iname 'RiderWiseAI_iOS_3.4.9*.zip' -o -iname 'RiderWiseAI_iOS_3.5.0*.zip' \) -print | head -n 1)"
+          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname 'RiderWiseAI_iOS_3.5.0*.zip' -print -quit)"
           if [[ -n "$ZIP" ]]; then
             echo "Using source archive: $(basename "$ZIP")"
             unzip -tq "$ZIP"
@@ -77,6 +76,15 @@ jobs:
           }
           PROJECT_DIR="$(dirname "$PROJECT_FILE")"
           test -f "$PROJECT_DIR/scripts/verify-portable.sh"
+          if ! grep -Fq 'MARKETING_VERSION: "3.5.0"' "$PROJECT_DIR/project.yml"; then
+            echo "ERROR: The selected source archive is not RiderWise AI 3.5.0. Remove old 3.4.9 ZIP files and upload the 3.5.0 source ZIP."
+            grep -n 'MARKETING_VERSION\|CURRENT_PROJECT_VERSION' "$PROJECT_DIR/project.yml" || true
+            exit 1
+          fi
+          if ! grep -Fq 'CURRENT_PROJECT_VERSION: "350"' "$PROJECT_DIR/project.yml"; then
+            echo "ERROR: Expected RiderWise AI build number 350 in project.yml."
+            exit 1
+          fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Source project: $PROJECT_DIR"
 
