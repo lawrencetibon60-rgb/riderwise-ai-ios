@@ -1,0 +1,46 @@
+      - name: Verify archived app and capture configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$ARTIFACT_DIR/RiderWiseAI-3.5.0.xcarchive/Products/Applications/RiderWiseAI.app"
+          test -d "$APP"
+          test -s "$APP/Info.plist"
+          python3 - "$APP" "$PROJECT_DIR" <<'PY'
+          import os, plistlib, sys
+
+          app, project = sys.argv[1], sys.argv[2]
+          with open(os.path.join(app, "Info.plist"), "rb") as f:
+              info = plistlib.load(f)
+
+          checks = {
+              "bundle identifier": info.get("CFBundleIdentifier") == "ph.riderwise.ai",
+              "marketing version": info.get("CFBundleShortVersionString") == "3.5.0",
+              "build number": str(info.get("CFBundleVersion")) == "350",
+              "screen capture usage description": bool(info.get("NSScreenCaptureUsageDescription")),
+              "screen-capture background mode": "screen-capture" in info.get("UIBackgroundModes", []),
+          }
+
+          ent_path = os.path.join(project, "iOSApp", "RiderWiseAI.entitlements")
+          if os.path.isfile(ent_path):
+              with open(ent_path, "rb") as f:
+                  entitlements = plistlib.load(f)
+              checks["screen-recording entitlement declaration"] = (
+                  entitlements.get("com.apple.developer.screen-recording") is True
+              )
+          else:
+              checks["screen-recording entitlement file exists"] = False
+
+          resource_names = {"luzon_psgc_3q_2026.json", "luzon_psgc_3q_2026.json.gz"}
+          checks["Luzon PSGC resource in archived app"] = any(
+              filename in resource_names
+              for _, _, files in os.walk(app)
+              for filename in files
+          )
+
+          for label, passed in checks.items():
+              print(f"{'PASS' if passed else 'FAIL'}: {label}")
+
+          if not all(checks.values()):
+              sys.exit("Archive verification failed; inspect the FAIL line(s) above.")
+          print("3.5.0 archive metadata, capture declarations and Luzon resources verified.")
+          PY
