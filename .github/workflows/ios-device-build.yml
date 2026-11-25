@@ -5,9 +5,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
-      - ".github/workflows/ios-device-build.yml"
 
 permissions:
   contents: read
@@ -24,18 +21,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Verify and extract source ZIP
+      - name: Verify source tree
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
-          test -f "$ZIP"
-          unzip -tq "$ZIP"
-          mkdir -p "$RUNNER_TEMP/riderwise-source"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
-          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
-          test -n "$PROJECT_FILE"
-          echo "SOURCE_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
+          test -f "$GITHUB_WORKSPACE/project.yml"
+          test -f "$GITHUB_WORKSPACE/Package.swift"
+          test -f "$GITHUB_WORKSPACE/scripts/verify-portable.sh"
+          test -d "$GITHUB_WORKSPACE/iOSApp"
+          test -d "$GITHUB_WORKSPACE/Sources/RiderWiseCore"
+          echo "SOURCE_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
 
       - name: Run Swift tests and source checks
         run: bash "$SOURCE_DIR/scripts/verify-portable.sh"
@@ -48,17 +43,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Verify and extract source ZIP
+      - name: Verify source tree
         shell: bash
         run: |
           set -euo pipefail
-          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_PersistentMultiRecommendationPiP_1p5s_GitHub.zip"
-          test -f "$ZIP"
-          mkdir -p "$RUNNER_TEMP/riderwise-source"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
-          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
-          test -n "$PROJECT_FILE"
-          echo "PROJECT_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
+          test -f "$GITHUB_WORKSPACE/project.yml"
+          test -f "$GITHUB_WORKSPACE/Package.swift"
+          test -d "$GITHUB_WORKSPACE/iOSApp"
+          test -d "$GITHUB_WORKSPACE/Sources/RiderWiseCore"
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
 
       - name: Show Apple build tools
         run: |
