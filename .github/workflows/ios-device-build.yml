@@ -21,19 +21,38 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Verify source tree
+      - name: Verify and extract source ZIP
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$GITHUB_WORKSPACE/project.yml"
-          test -f "$GITHUB_WORKSPACE/Package.swift"
-          test -f "$GITHUB_WORKSPACE/scripts/verify-portable.sh"
-          test -d "$GITHUB_WORKSPACE/iOSApp"
-          test -d "$GITHUB_WORKSPACE/Sources/RiderWiseCore"
-          echo "SOURCE_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_WrappedAddressOCR_Repair_GitHub.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: Expected source ZIP not found: $ZIP"
+            echo "Repository root contents:"
+            ls -la "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          mkdir -p "$RUNNER_TEMP/riderwise-source"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          VERIFY_SCRIPT="$(find "$RUNNER_TEMP/riderwise-source" -type f -path '*/scripts/verify-portable.sh' -print -quit)"
+          if [[ -z "$PROJECT_FILE" ]]; then
+            echo "ERROR: project.yml not found inside source ZIP. Extracted files:"
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            exit 1
+          fi
+          if [[ -z "$VERIFY_SCRIPT" ]]; then
+            echo "ERROR: scripts/verify-portable.sh not found inside source ZIP."
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            exit 1
+          fi
+          echo "SOURCE_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
+          echo "VERIFY_SCRIPT=$VERIFY_SCRIPT" >> "$GITHUB_ENV"
 
       - name: Run Swift tests and source checks
-        run: bash "$SOURCE_DIR/scripts/verify-portable.sh"
+        shell: bash
+        run: bash "$VERIFY_SCRIPT"
 
   ios-device-build:
     name: iOS simulator build and unsigned device archive
@@ -43,15 +62,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Verify source tree
+      - name: Verify and extract source ZIP
         shell: bash
         run: |
           set -euo pipefail
-          test -f "$GITHUB_WORKSPACE/project.yml"
-          test -f "$GITHUB_WORKSPACE/Package.swift"
-          test -d "$GITHUB_WORKSPACE/iOSApp"
-          test -d "$GITHUB_WORKSPACE/Sources/RiderWiseCore"
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          ZIP="$GITHUB_WORKSPACE/RiderWiseAI_iOS_3.4.9_WrappedAddressOCR_Repair_GitHub.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: Expected source ZIP not found: $ZIP"
+            ls -la "$GITHUB_WORKSPACE"
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          mkdir -p "$RUNNER_TEMP/riderwise-source"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/riderwise-source"
+          PROJECT_FILE="$(find "$RUNNER_TEMP/riderwise-source" -type f -name project.yml -print -quit)"
+          if [[ -z "$PROJECT_FILE" ]]; then
+            echo "ERROR: project.yml not found inside source ZIP. Extracted files:"
+            find "$RUNNER_TEMP/riderwise-source" -maxdepth 5 -print | head -300
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$PROJECT_FILE")" >> "$GITHUB_ENV"
 
       - name: Show Apple build tools
         run: |
